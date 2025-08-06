@@ -1,0 +1,5 @@
+*.keras
+*.npy
+*.db
+__pycache__/
+augmented_dataset/
