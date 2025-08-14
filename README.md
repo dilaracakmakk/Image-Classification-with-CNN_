@@ -31,3 +31,14 @@ pip install -r requirements.txt
 python app.py
 pip install -r requirements.txt
 python app.py
+## Kurulum
+1) Python 3.10+ kurun ve sanal ortam:
+   python -m venv .venv
+   .\.venv\Scripts\activate
+   pip install -r requirements.txt
+
+2) (Eğitim) Verinizi `dataset/` altına koyun. `augment.py` ile artırın, `train_model.py` ile eğitin.
+   Üretilen modeli köke `simple_cnn_model.keras` adıyla yerleştirin (Git'e dahil edilmez).
+
+3) (Uygulama) Klasöre `model_kodlari.csv` ekleyin (paylaşılmaz).
+   Format için `model_kodlari.sample.csv` dosyasına bakın.
