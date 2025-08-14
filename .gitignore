@@ -1,5 +1,33 @@
-*.keras
-*.npy
-*.db
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# Venv & IDE
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+
+# Data & models
+dataset/
+dataset_split/
 augmented_dataset/
+*.keras
+*.h5
+*.tflite
+*.onnx
+*.pb
+*.npy
+*.npz
+*.csv
+!model_kodlari.sample.csv  
+
+# Caches / misc
+*_cache/
+*.log
+.DS_Store
+Thumbs.db
