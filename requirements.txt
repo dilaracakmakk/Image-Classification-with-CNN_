@@ -1,0 +1,5 @@
+﻿tensorflow-cpu==2.*
+keras==3.*
+pillow
+numpy
+pandas
