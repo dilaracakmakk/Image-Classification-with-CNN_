@@ -1,325 +1,421 @@
 import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog, simpledialog, messagebox
-from PIL import Image, ImageTk
-import numpy as np
-import pandas as pd
-import pickle
-import json
-import os
-import re
-from functools import partial
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
-from tensorflow.keras.applications.efficientnet import preprocess_input
-from tensorflow.keras.applications import EfficientNetB0
-from keras.models import Model
-from prediction_log import init_db, save_prediction
+from tkinter import ttk, filedialog
+from PIL import Image, ImageTk, ImageOps, ImageFile
+import os, json, re, pandas as pd
 
-IMG_SIZE = (224, 224)
-MODEL_PATH = "simple_cnn_model.keras"
-DATASET_PATH = "augmented_dataset"
-CLASS_NAMES_FILE = "class_names.npy"
+# ====== CONFIG ======
+AUG_PATH = "augmented_dataset"          # Görselleri burada arayacağız
+CLASS_INDEX_JSON = "class_indices.json" # (varsa) kategorileri buradan okur
+CSV_FILE = "model_kodlari.csv"          # Model/Firma No bilgileri
+DEFAULT_IMAGE_PATH = "emirali.jpg"      # Başlangıç görseli
 
-df = pd.read_csv("model_kodlari.csv", delimiter=";", on_bad_lines="skip")
-df.columns = df.columns.str.strip()
-df["Model No"] = df["Model No"].astype(str).str.strip().str.lower()
-df["Firma Model No"] = df["Firma Model No"].astype(str).str.strip().str.lower()
+# ====== DATA LOAD ======
+if os.path.exists(CSV_FILE):
+    df = pd.read_csv(CSV_FILE, delimiter=';', on_bad_lines='skip')
+    df.columns = df.columns.str.strip()
+    for col in ["Model No", "Firma Model No", "Giysi Grubu", "Giysi Cinsi"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.lower()
+else:
+    df = pd.DataFrame(columns=["Model No","Firma Model No","Giysi Grubu","Giysi Cinsi"])  # boş ama hatasız
 
+# Kategorileri belirle
+if os.path.exists(CLASS_INDEX_JSON):
+    with open(CLASS_INDEX_JSON, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+        CATEGORIES = [raw[str(i)] for i in range(len(raw))]
+else:
+    # augmented_dataset alt klasörlerinden oku; yoksa varsayılan
+    CATEGORIES = [d for d in os.listdir(AUG_PATH) if os.path.isdir(os.path.join(AUG_PATH, d))] if os.path.exists(AUG_PATH) else ["dress","pants","tshirt"]
 
+# --- Performance settings ---
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # broken JPEG'lerde crash olmasın
+THUMB_SIZE = (120, 120)
+THUMB_CACHE_DIR = "_thumb_cache"
+os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
+CAT_DIR_CACHE = {}  # {normalized_category: (real_folder_name, [filepaths])}
 
-def load_class_indices(path="class_indices.json"):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-            return [raw[str(i)] for i in range(len(raw))]
-    else:
-        return ["dress", "pants", "tshirt"]
-
-CATEGORIES = load_class_indices() 
-model = load_model(MODEL_PATH)
-
+# category_info.json (varsa) sadece ekstra meta için kullanılır
 def load_category_json(path="category_info.json"):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_category_json(data, path="category_info.json"):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+CATEGORY_INFO = load_category_json()
 
-def extract_folder_code(file_path):
-    match = re.search(r"E\d{2}-S\d{2}", file_path)
-    return match.group(0) if match else None
-
-def get_real_class_from_path(file_path):
-    abs_path = os.path.abspath(file_path)
-    parts = abs_path.split(os.path.sep)
-    try:
-        idx = parts.index("augmented_dataset")
-        return parts[idx + 1]
-    except (ValueError, IndexError):
-        return "-"
-
-
-
-
-def get_matching_row(predicted_label):
-    predicted_label = str(predicted_label).strip().lower()
-    for _, row in df.iterrows():
-        model_no = str(row["Model No"]).strip().lower()
-        firma_model_no = str(row["Firma Model No"]).strip().lower()
-        if predicted_label == model_no or predicted_label == firma_model_no:
-            return row
-    return None
-
-
-
-
-
-
-def predict_image(img_path):
-    img = Image.open(img_path).convert("RGB").resize(IMG_SIZE)
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-
-    prediction = model.predict(img_array)
-    predicted_index = np.argmax(prediction)
-    predicted_class = CATEGORIES[predicted_index]
-
-    for idx, score in enumerate(prediction[0]):
-        print(f"{CATEGORIES[idx]}: %{score * 100:.2f}")
-
-    return predicted_class
-
-
-
-
-def cosine_similarity_np(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-def load_feature_model():
-    base = EfficientNetB0(weights='imagenet', include_top=False, pooling='avg')
-    return Model(inputs=base.input, outputs=base.output)
-
-feature_model = load_feature_model()
-
-def extract_features(img_path):
-    img = Image.open(img_path).convert("RGB").resize((224, 224))
-    img = preprocess_input(np.expand_dims(np.array(img), axis=0))
-    return feature_model.predict(img).flatten()
-
-def find_similar_images(image_path, top_k=3):
-    with open("features.pkl", "rb") as f:
-        features_list, image_paths = pickle.load(f)
-    new_feat = extract_features(image_path)
-    sims = [cosine_similarity_np(new_feat, feat) for feat in features_list]
-    indices = np.argsort(sims)[::-1][:top_k]
-    return [(image_paths[i], sims[i]) for i in indices]
-
-def show_info_popup(image_path):
-    popup = tk.Toplevel()
-    popup.title("Ürün Bilgisi")
-    popup.geometry("320x180")
-    popup.configure(bg="#ffffff")
-
-    tk.Label(popup, text=f"Dosya: {os.path.basename(image_path)}", bg="white").pack(pady=5)
-    tk.Label(popup, text=f"(Detaylı bilgi görsel seçildikten sonra sağ tarafta gösterilir)", bg="white").pack()
-
-def show_similar_images(result_list):
-    sim_window = tk.Toplevel(root)
-    sim_window.title("Benzer Fotoğraflar")
-    sim_window.configure(bg="white")
-
-    for idx, (path, score) in enumerate(result_list):
-        frame = tk.Frame(sim_window, bg="#ffffff", bd=1, relief="solid")
-        frame.grid(row=0, column=idx, padx=15, pady=10)
-
-        img = Image.open(path).resize((160, 160))
-        img = ImageTk.PhotoImage(img)
-
-        lbl = tk.Label(frame, image=img, bg="#ffffff", cursor="hand2")
-        lbl.image = img
-        lbl.pack()
-        lbl.bind("<Button-1>", partial(on_similar_click, image_path=path))
-
-        tk.Label(frame, text=f"Benzerlik: {score:.2f}", bg="#ffffff").pack()
-
-def on_similar_click(event, image_path):
-    show_info_popup(image_path)
-
+# ====== HELPERS ======
 def extract_model_no_from_filename(path):
     base = os.path.basename(path)
     name, _ = os.path.splitext(base)
-    name = re.sub(r"\(.*?\)", "", name)
-    name = name.split("_")[0]
-    return name.strip()
+    name = re.sub(r"\(.*?\)", "", name)  # parantez içlerini at
+    name = name.split("_")[0]               # ilk '_' öncesi
+    return name.strip().lower()
 
-def process_file_for_prediction(file_path):
-    print("Tahmin ediliyor...")
-    predicted_label = predict_image(file_path)
-
-    tahmin_map = {
-        "dress": "Elbise",
-        "pants": "Pantolon",
-        "tshirt": "Tişört"
-    }
-
+# ====== UI CALLBACKS ======
+def show_csv_info(file_path):
+    model_no_clean = extract_model_no_from_filename(file_path)
     try:
-        df["Firma Model No"] = df["Firma Model No"].astype(str).str.strip().str.lower()
-        df["Giysi Cinsi"] = df["Giysi Cinsi"].astype(str).str.strip().str.lower()
-        df["Model No"] = df["Model No"].astype(str).str.strip().str.lower()
-
-        model_no_clean = extract_model_no_from_filename(file_path).strip().lower()
-        tahmin_turkce = tahmin_map.get(predicted_label.lower(), predicted_label).strip().lower()
-
-        df.dropna(subset=["Firma Model No", "Giysi Cinsi"], inplace=True)
-
-        matched = df[
-            (df["Firma Model No"] == model_no_clean) |
-            (df["Model No"] == model_no_clean)
-        ]
-
-    except Exception as e:
-        print("Eşleşme sırasında hata oluştu:", e)
+        matched = df[(df.get("Firma Model No", "") == model_no_clean) | (df.get("Model No", "") == model_no_clean)] if not df.empty else pd.DataFrame()
+    except Exception:
         matched = pd.DataFrame()
-
-    img = Image.open(file_path).resize((300, 300))
-    img_tk = ImageTk.PhotoImage(img)
-    img_label.config(image=img_tk)
-    img_label.image = img_tk
 
     if not matched.empty:
         row = matched.iloc[0]
-        model_no = row["Model No"]
-        firma_model_no = row["Firma Model No"]
-        giysi_grubu = row["Giysi Grubu"]
-        giysi_cinsi = row["Giysi Cinsi"]
-    else:
-        model_no = extract_model_no_from_filename(file_path)
-        firma_model_no = "-"
-        giysi_grubu = "-"
-        giysi_cinsi = tahmin_map.get(predicted_label.lower(), predicted_label)
-
-    text = (
-        f"Model No: {model_no}\n"
-        f"Firma Model No: {firma_model_no}\n"
-        f"Giysi Grubu: {giysi_grubu}\n"
-        f"Giysi Cinsi: {giysi_cinsi}"
-    )
-    result_label.config(text=text)
-
-    try:
-        save_prediction(
-            folder_name=os.path.basename(file_path),
-            real_class=get_real_class_from_path(file_path) or "-",
-            model_no=model_no,
-            clothes_type=giysi_cinsi
+        update_info_panel(
+            row.get("Model No", "-"),
+            row.get("Firma Model No", "-"),
+            row.get("Giysi Grubu", "-"),
+            row.get("Giysi Cinsi", "-")
         )
-    except Exception as e:
-        print(f"Veritabanı kaydı başarısız: {e}")
-
-    try:
-        similar = find_similar_images(file_path)
-        show_similar_images(similar)
-    except Exception as e:
-        print("Benzerlik hatası:", e)
-
-def upload_and_predict():
-    path = filedialog.askopenfilename(filetypes=[("Görsel", "*.jpg *.jpeg *.png")])
-    if path:
-        process_file_for_prediction(path)
-
-def apply_filters():
-    selected_cat = category_combo.get().lower()
-    model_kw = model_var.get().lower()
-    clothes_kw = clothes_var.get().lower()
-
-    data = load_category_json()
-    matches = []
-
-    for filename, values in data.items():
-        if not isinstance(values, (list, tuple)) or len(values) != 2:
-            continue
-        model_code, category = values
-        if (selected_cat in category.lower() or not selected_cat) and \
-           (model_kw in model_code.lower()) and \
-           (clothes_kw in category.lower() or not clothes_kw):
-            matches.append(f"{filename} → {model_code} | {category}")
-
-    filter_result.delete("1.0", tk.END)
-    if matches:
-        filter_result.insert(tk.END, "\n".join(matches))
     else:
-        filter_result.insert(tk.END, "Eşleşme bulunamadı.")
+        fn = os.path.basename(file_path)
+        cat = "-"
+        meta = CATEGORY_INFO.get(fn)
+        if isinstance(meta, (list, tuple)) and len(meta) == 2:
+            cat = meta[1]
+        update_info_panel(model_no_clean, "-", "-", cat)
 
-root = tk.Tk()
-info_label = tk.Label(root, text="", font=("Arial", 12), justify="left")
-info_label.pack(pady=10)
 
-root.title("Kıyafet Tanımlama Sistemi")
-root.geometry("950x820")
-root.configure(bg="#f6f7fb")
-
-header = tk.Label(root, text="Kıyafet Tanımlama Paneli", font=("Segoe UI", 22, "bold"), bg="#f6f7fb")
-header.pack(pady=20)
-
-content_frame = tk.Frame(root, bg="white", bd=1, relief="solid")
-content_frame.pack(padx=20, pady=10)
-
-img_label = tk.Label(content_frame, bg="#ffffff")
-img_label.grid(row=0, column=0, padx=20, pady=20)
-
-result_label = tk.Label(content_frame, text="", font=("Segoe UI", 11), bg="#ffffff", justify="left")
-result_label.grid(row=0, column=1, padx=20, pady=20, sticky="n")
-
-filter_frame = tk.Frame(content_frame, bg="#ffffff")
-filter_frame.grid(row=0, column=2, padx=20, pady=20, sticky="n")
-
-ttk.Label(filter_frame, text=" Gelişmiş Filtreleme", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=10)
-
-category_var = tk.StringVar()
-ttk.Label(filter_frame, text="Kategori").pack(anchor="w")
-category_combo = ttk.Combobox(filter_frame, textvariable=category_var, values=CATEGORIES, state="readonly")
-category_combo.pack(pady=5)
-
-model_var = tk.StringVar()
-ttk.Label(filter_frame, text="Model Kodu").pack(anchor="w")
-model_entry = ttk.Entry(filter_frame, textvariable=model_var)
-model_entry.pack(pady=5)
-
-clothes_var = tk.StringVar()
-ttk.Label(filter_frame, text="Giysi Türü").pack(anchor="w")
-clothes_entry = ttk.Entry(filter_frame, textvariable=clothes_var)
-clothes_entry.pack(pady=5)
-
-filter_result = tk.Text(filter_frame, height=12, width=40)
-filter_result.pack(pady=5)
-
-ttk.Button(filter_frame, text=" Ara", command=apply_filters).pack(pady=10)
-
-select_btn = tk.Button(
-    root, text="Görsel Seç", command=upload_and_predict,
-    bg="#1abc9c", fg="white", font=("Segoe UI", 12, "bold"),
-    padx=20, pady=10, relief="flat", cursor="hand2"
-)
-select_btn.pack(pady=20)
-
-progress_label = tk.Label(root, text="", fg="green", bg="#f6f7fb", font=("Segoe UI", 10))
-progress_label.pack()
-
-footer = tk.Label(root, text="@Emirali Akıllı Görsel Tanıma", bg="#f6f7fb", fg="#95a5a6", font=("Segoe UI", 9))
-footer.pack(pady=10)
-
-DEFAULT_IMAGE_PATH = "emirali.jpg"
-if os.path.exists(DEFAULT_IMAGE_PATH):
-    img = Image.open(DEFAULT_IMAGE_PATH).resize((300, 300))
+def on_thumb_click(path):
+    global current_idx, current_image_path
+    current_image_path = path
+    ensure_gallery_for_path(path)
+    try:
+        current_idx = gallery_filepaths.index(path)
+    except ValueError:
+        current_idx = 0
+    # Galeriyi gizle, büyük resme dön
+    try:
+        gallery_frame.grid_remove()
+    except Exception:
+        pass
+    img = Image.open(path).resize((300, 300))
     img_tk = ImageTk.PhotoImage(img)
     img_label.config(image=img_tk)
     img_label.image = img_tk
-    result_label.config(text="")
+    img_label.grid()
+    show_csv_info(path)
 
-init_db()
+
+
+def _ensure_category_listing(category):
+    wanted = category.lower().rstrip('s')
+    if wanted in CAT_DIR_CACHE:
+        return CAT_DIR_CACHE[wanted]
+    if not os.path.exists(AUG_PATH):
+        return None, []
+    candidates = [d for d in os.listdir(AUG_PATH) if os.path.isdir(os.path.join(AUG_PATH, d))]
+    selected_folder = None
+    for d in candidates:
+        if d.lower().rstrip('s') == wanted:
+            selected_folder = d
+            break
+    if not selected_folder:
+        return None, []
+    folder_path = os.path.join(AUG_PATH, selected_folder)
+    file_list = [os.path.join(folder_path, f) for f in sorted(os.listdir(folder_path)) if f.lower().endswith((".jpg",".jpeg",".png"))]
+    CAT_DIR_CACHE[wanted] = (selected_folder, file_list)
+    return selected_folder, file_list
+
+
+def _get_cached_thumb(src_path):
+    try:
+        rel = os.path.relpath(src_path, AUG_PATH)
+        dest = os.path.join(THUMB_CACHE_DIR, os.path.splitext(rel)[0] + ".jpg")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if (not os.path.exists(dest)) or (os.path.getmtime(dest) < os.path.getmtime(src_path)):
+            with Image.open(src_path) as im:
+                im = ImageOps.exif_transpose(im)
+                im.thumbnail(THUMB_SIZE, Image.Resampling.LANCZOS)
+                im.save(dest, "JPEG", quality=80, optimize=True)
+        return dest
+    except Exception:
+        return src_path
+
+
+def display_images_by_category(category):
+    """Seçilen kategori için tüm görselleri solda, kaydırılabilir küçük kutucuklar halinde göster.
+       Performans: klasör/file listesi cache, disk thumbnail cache, batch render.
+    """
+    global gallery_filepaths, current_idx, last_selected_category
+    try:
+        img_label.grid_remove()
+    except Exception:
+        pass
+    gallery_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nwse")
+
+    for w in gallery_inner.winfo_children():
+        w.destroy()
+    gallery_images_refs.clear()
+    gallery_filepaths = []
+    current_idx = -1
+
+    selected_folder, file_list = _ensure_category_listing(category)
+    if not selected_folder:
+        return
+    last_selected_category = selected_folder
+    gallery_filepaths = file_list
+
+    BATCH = 80
+    def _render_batch(start_idx=0):
+        end_idx = min(len(gallery_filepaths), start_idx + BATCH)
+        for i in range(start_idx, end_idx):
+            p = gallery_filepaths[i]
+            tp = _get_cached_thumb(p)
+            try:
+                with Image.open(tp) as im:
+                    img_tk = ImageTk.PhotoImage(im)
+                gallery_images_refs.append(img_tk)
+                r, c = divmod(i, 5)
+                thumb = tk.Label(gallery_inner, image=img_tk, bg="white", bd=1, relief="solid", cursor="hand2")
+                thumb.image = img_tk
+                thumb.grid(row=r, column=c, padx=6, pady=6)
+                thumb.bind("<Button-1>", lambda e, p=p: on_thumb_click(p))
+            except Exception as e:
+                print("Thumb yüklenemedi:", e)
+        gallery_inner.update_idletasks()
+        gallery_canvas.configure(scrollregion=gallery_canvas.bbox("all"))
+        if end_idx < len(gallery_filepaths):
+            root.after(1, lambda: _render_batch(end_idx))
+
+    _render_batch(0)
+
+# Öncekileri temizle
+    for w in gallery_inner.winfo_children():
+        w.destroy()
+    gallery_images_refs.clear()
+
+    # tshirt/tshirts varyasyonlarını normalize et
+    wanted = category.lower().rstrip('s')
+
+    # Klasör yolu
+    if not os.path.exists(AUG_PATH):
+        return
+
+    # Hedef klasörü bul (tshirt/tshirts toleransı)
+    candidates = [d for d in os.listdir(AUG_PATH) if os.path.isdir(os.path.join(AUG_PATH, d))]
+    selected_folder = None
+    for d in candidates:
+        if d.lower().rstrip('s') == wanted:
+            selected_folder = d
+            break
+    if not selected_folder:
+        return
+
+    folder_path = os.path.join(AUG_PATH, selected_folder)
+
+    row = col = 0
+    for filename in os.listdir(folder_path):
+        if filename.lower().endswith((".jpg",".jpeg",".png")):
+            image_path = os.path.join(folder_path, filename)
+            try:
+                img = Image.open(image_path).resize((110, 110))
+                img_tk = ImageTk.PhotoImage(img)
+                thumb = tk.Label(gallery_inner, image=img_tk, bg="white", bd=1, relief="solid", cursor="hand2")
+                thumb.image = img_tk
+                gallery_images_refs.append(img_tk)
+                thumb.grid(row=row, column=col, padx=6, pady=6)
+                thumb.bind("<Button-1>", lambda e, p=image_path: on_thumb_click(p))
+                col += 1
+                if col >= 5:
+                    col = 0
+                    row += 1
+            except Exception as e:
+                print("Görsel yüklenemedi:", e)
+
+    gallery_inner.update_idletasks()
+    gallery_canvas.configure(scrollregion=gallery_canvas.bbox("all"))
+
+
+def upload_and_predict():
+    global current_image_path
+    path = filedialog.askopenfilename(filetypes=[("Görsel", "*.jpg *.jpeg *.png")])
+    if path:
+        current_image_path = path
+        on_thumb_click(path)
+
+
+def open_filter_panel():
+    win = tk.Toplevel(root)
+    win.title("Gelişmiş Filtreleme")
+    win.geometry("320x220+980+120")
+
+    ttk.Label(win, text="Kategori").pack(anchor="w", padx=10, pady=(10,4))
+    cat_combo = ttk.Combobox(win, values=CATEGORIES, state="readonly")
+    cat_combo.pack(padx=10, fill="x")
+
+    def do_search():
+        sel = cat_combo.get().strip()
+        if sel:
+            display_images_by_category(sel)
+    ttk.Button(win, text="Ara", command=do_search).pack(pady=12)
+
+# ====== UI ======
+root = tk.Tk()
+root.title("Kıyafet Tanımlama Paneli")
+root.geometry("1000x760")
+root.configure(bg="#f6f7fb")
+
+header = tk.Label(root, text="Kıyafet Tanımlama Paneli", font=("Segoe UI", 22, "bold"), bg="#f6f7fb")
+header.pack(pady=16)
+
+content_frame = tk.Frame(root, bg="white", bd=1, relief="solid")
+content_frame.pack(padx=20, pady=10, fill="both", expand=True)
+content_frame.grid_rowconfigure(0, weight=1)
+content_frame.grid_columnconfigure(0, weight=1)
+content_frame.grid_columnconfigure(1, weight=0)
+content_frame.grid_columnconfigure(2, weight=0)
+
+# Sol: büyük görsel alanı (başlangıçta default görsel)
+img_label = tk.Label(content_frame, bg="#ffffff")
+img_label.grid(row=0, column=0, padx=20, pady=(20,6), sticky="nw")
+
+# Navigasyon butonları (sol ve sağ oklar aynı hizada alt köşelerde)
+left_btn = tk.Button(content_frame, text="◀", command=lambda: navigate(-1), width=3)
+left_btn.grid(row=1, column=0, padx=20, pady=(0,12), sticky="w")
+right_btn = tk.Button(content_frame, text="▶", command=lambda: navigate(1), width=3)
+right_btn.grid(row=1, column=0, padx=20, pady=(0,12), sticky="e")
+
+# Sol: scrollable galeri (başta gizli)
+gallery_frame = tk.Frame(content_frame, bg="#ffffff")
+gallery_canvas = tk.Canvas(gallery_frame, bg="#ffffff", highlightthickness=0, width=520, height=460)
+scrollbar = ttk.Scrollbar(gallery_frame, orient="vertical", command=gallery_canvas.yview)
+
+gallery_inner = tk.Frame(gallery_canvas, bg="#ffffff")
+inner_window = gallery_canvas.create_window((0,0), window=gallery_inner, anchor="nw")
+
+gallery_canvas.configure(yscrollcommand=scrollbar.set)
+
+gallery_canvas.grid(row=0, column=0, sticky="nsew")
+scrollbar.grid(row=0, column=1, sticky="ns")
+gallery_frame.grid_rowconfigure(0, weight=1)
+gallery_frame.grid_columnconfigure(0, weight=1)
+
+gallery_images_refs = []  # thumbnails GC'den korunur
+
+# Galeri gezinme durumu
+gallery_filepaths = []
+current_idx = -1
+last_selected_category = None  # geri dönüş için son görüntülenen kategori
+current_image_path = None      # ekranda büyük gösterilen son görsel
+
+def ensure_gallery_for_path(path):
+    """If gallery list does not match the folder of path, rebuild it from that folder."""
+    global gallery_filepaths, last_selected_category
+    folder = os.path.dirname(path)
+    last_selected_category = os.path.basename(folder)
+    if not gallery_filepaths or os.path.dirname(gallery_filepaths[0]) != folder:
+        files = []
+        try:
+            for fn in sorted(os.listdir(folder)):
+                if fn.lower().endswith((".jpg",".jpeg",".png")):
+                    files.append(os.path.join(folder, fn))
+        except Exception:
+            files = [path]
+        gallery_filepaths = files
+    return
+    if current_idx == -1:
+        current_idx = 0
+    else:
+        current_idx = (current_idx + delta) % len(gallery_filepaths)
+    on_thumb_click(gallery_filepaths[current_idx])
+
+
+def navigate(delta):
+    global current_idx
+    if not gallery_filepaths:
+        return
+    if current_idx == -1:
+        current_idx = 0
+    else:
+        current_idx = (current_idx + delta) % len(gallery_filepaths)
+    on_thumb_click(gallery_filepaths[current_idx])
+
+def on_left(_=None):
+    navigate(-1)
+
+def on_right(_=None):
+    navigate(1)
+
+
+def go_back():
+    """Top (▲) button action: return to a gallery.
+    Priority: last_selected_category (if exists in AUG_PATH), otherwise infer from current_image_path
+    if it resides under AUG_PATH. If none available, do nothing.
+    """
+    # 1) Try stored last_selected_category
+    if last_selected_category and os.path.isdir(os.path.join(AUG_PATH, last_selected_category)):
+        display_images_by_category(last_selected_category)
+        return
+    # 2) Try infer from current image path
+    if current_image_path:
+        abs_aug = os.path.abspath(AUG_PATH)
+        abs_cur = os.path.abspath(current_image_path)
+        if abs_cur.startswith(abs_aug):
+            cat = os.path.basename(os.path.dirname(abs_cur))
+            if cat and os.path.isdir(os.path.join(AUG_PATH, cat)):
+                display_images_by_category(cat)
+                return
+    # 3) Fallback: do nothing (or show gallery of first category if you want)
+    # pass
+
+
+def _gal_conf(_):
+    gallery_canvas.configure(scrollregion=gallery_canvas.bbox("all"))
+
+gallery_inner.bind("<Configure>", _gal_conf)
+
+# Sağ: bilgi alanı (düzenli grid, iki sütun)
+info_frame = tk.Frame(content_frame, bg="#ffffff")
+info_frame.grid(row=0, column=1, padx=20, pady=20, sticky="ne")
+
+info_title = tk.Label(info_frame, text="Ürün Bilgisi", font=("Segoe UI", 12, "bold"), bg="#ffffff")
+info_title.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,8))
+
+def _add_info_row(r, label_text):
+    tk.Label(info_frame, text=label_text, font=("Segoe UI", 11, "bold"), bg="#ffffff").grid(row=r, column=0, sticky="w", padx=(0,10), pady=4)
+    val = tk.Label(info_frame, text="-", font=("Segoe UI", 11), bg="#ffffff", anchor="w", width=28, wraplength=280, justify="left")
+    val.grid(row=r, column=1, sticky="w", pady=4)
+    return val
+
+info_model_val = _add_info_row(1, "Model No:")
+info_firma_val = _add_info_row(2, "Firma Model No:")
+info_grup_val  = _add_info_row(3, "Giysi Grubu:")
+info_cins_val  = _add_info_row(4, "Giysi Cinsi:")
+
+
+def update_info_panel(model_no, firma_no, grup, cins):
+    info_model_val.config(text=str(model_no) if model_no else "-")
+    info_firma_val.config(text=str(firma_no) if firma_no else "-")
+    info_grup_val.config(text=str(grup) if grup else "-")
+    info_cins_val.config(text=str(cins) if cins else "-")
+
+# Sağ üst: hamburger
+top_controls = tk.Frame(content_frame, bg="white")
+up_btn = tk.Button(top_controls, text="▲", font=("Segoe UI", 12), command=go_back, bd=0, bg="white")
+hamburger_btn = tk.Button(top_controls, text="☰", font=("Segoe UI", 14), command=open_filter_panel, bd=0, bg="white")
+up_btn.pack(side="left", padx=(0,8))
+hamburger_btn.pack(side="left")
+top_controls.grid(row=0, column=2, padx=10, pady=10, sticky="ne")
+
+# Alt: Görsel Seç
+select_btn = tk.Button(root, text="Görsel Seç", command=upload_and_predict,
+                       bg="#1abc9c", fg="white", font=("Segoe UI", 12, "bold"), padx=20, pady=10, relief="flat")
+select_btn.pack(pady=18)
+
+# Başlangıçta default görsel
+if os.path.exists(DEFAULT_IMAGE_PATH):
+    try:
+        _img = Image.open(DEFAULT_IMAGE_PATH).resize((300, 300))
+        _img_tk = ImageTk.PhotoImage(_img)
+        img_label.config(image=_img_tk)
+        img_label.image = _img_tk
+    except Exception:
+        pass
+
+# Klavye ok tuşlarıyla gezinme
+root.bind_all("<Left>", on_left)
+root.bind_all("<Right>", on_right)
+
 root.mainloop()

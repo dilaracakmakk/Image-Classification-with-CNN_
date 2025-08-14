@@ -1,6 +1,6 @@
 import os
 import json 
-split_dir ="augmented_dataset"
+split_dir ="dataset"
 output_path="category_info.json"
 
 category_info={}
