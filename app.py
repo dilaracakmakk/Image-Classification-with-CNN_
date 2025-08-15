@@ -3,13 +3,12 @@ from tkinter import ttk, filedialog
 from PIL import Image, ImageTk, ImageOps, ImageFile
 import os, json, re, pandas as pd
 
-# ====== CONFIG ======
-AUG_PATH = "augmented_dataset"          # Görselleri burada arayacağız
-CLASS_INDEX_JSON = "class_indices.json" # (varsa) kategorileri buradan okur
-CSV_FILE = "model_kodlari.csv"          # Model/Firma No bilgileri
-DEFAULT_IMAGE_PATH = "emirali.jpg"      # Başlangıç görseli
 
-# ====== DATA LOAD ======
+AUG_PATH = "augmented_dataset"         
+CLASS_INDEX_JSON = "class_indices.json"
+CSV_FILE = "model_kodlari.csv"          
+DEFAULT_IMAGE_PATH = "emirali.jpg"      
+
 if os.path.exists(CSV_FILE):
     df = pd.read_csv(CSV_FILE, delimiter=';', on_bad_lines='skip')
     df.columns = df.columns.str.strip()
@@ -17,25 +16,21 @@ if os.path.exists(CSV_FILE):
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip().str.lower()
 else:
-    df = pd.DataFrame(columns=["Model No","Firma Model No","Giysi Grubu","Giysi Cinsi"])  # boş ama hatasız
+    df = pd.DataFrame(columns=["Model No","Firma Model No","Giysi Grubu","Giysi Cinsi"])  
 
-# Kategorileri belirle
 if os.path.exists(CLASS_INDEX_JSON):
     with open(CLASS_INDEX_JSON, "r", encoding="utf-8") as f:
         raw = json.load(f)
         CATEGORIES = [raw[str(i)] for i in range(len(raw))]
 else:
-    # augmented_dataset alt klasörlerinden oku; yoksa varsayılan
     CATEGORIES = [d for d in os.listdir(AUG_PATH) if os.path.isdir(os.path.join(AUG_PATH, d))] if os.path.exists(AUG_PATH) else ["dress","pants","tshirt"]
 
-# --- Performance settings ---
-ImageFile.LOAD_TRUNCATED_IMAGES = True  # broken JPEG'lerde crash olmasın
+ImageFile.LOAD_TRUNCATED_IMAGES = True  
 THUMB_SIZE = (120, 120)
 THUMB_CACHE_DIR = "_thumb_cache"
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
-CAT_DIR_CACHE = {}  # {normalized_category: (real_folder_name, [filepaths])}
+CAT_DIR_CACHE = {} 
 
-# category_info.json (varsa) sadece ekstra meta için kullanılır
 def load_category_json(path="category_info.json"):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -44,15 +39,13 @@ def load_category_json(path="category_info.json"):
 
 CATEGORY_INFO = load_category_json()
 
-# ====== HELPERS ======
 def extract_model_no_from_filename(path):
     base = os.path.basename(path)
     name, _ = os.path.splitext(base)
-    name = re.sub(r"\(.*?\)", "", name)  # parantez içlerini at
-    name = name.split("_")[0]               # ilk '_' öncesi
+    name = re.sub(r"\(.*?\)", "", name)  
+    name = name.split("_")[0]              
     return name.strip().lower()
 
-# ====== UI CALLBACKS ======
 def show_csv_info(file_path):
     model_no_clean = extract_model_no_from_filename(file_path)
     try:
@@ -85,7 +78,6 @@ def on_thumb_click(path):
         current_idx = gallery_filepaths.index(path)
     except ValueError:
         current_idx = 0
-    # Galeriyi gizle, büyük resme dön
     try:
         gallery_frame.grid_remove()
     except Exception:
@@ -181,19 +173,15 @@ def display_images_by_category(category):
 
     _render_batch(0)
 
-# Öncekileri temizle
     for w in gallery_inner.winfo_children():
         w.destroy()
     gallery_images_refs.clear()
 
-    # tshirt/tshirts varyasyonlarını normalize et
     wanted = category.lower().rstrip('s')
 
-    # Klasör yolu
     if not os.path.exists(AUG_PATH):
         return
 
-    # Hedef klasörü bul (tshirt/tshirts toleransı)
     candidates = [d for d in os.listdir(AUG_PATH) if os.path.isdir(os.path.join(AUG_PATH, d))]
     selected_folder = None
     for d in candidates:
@@ -251,7 +239,6 @@ def open_filter_panel():
             display_images_by_category(sel)
     ttk.Button(win, text="Ara", command=do_search).pack(pady=12)
 
-# ====== UI ======
 root = tk.Tk()
 root.title("Kıyafet Tanımlama Paneli")
 root.geometry("1000x760")
@@ -267,17 +254,14 @@ content_frame.grid_columnconfigure(0, weight=1)
 content_frame.grid_columnconfigure(1, weight=0)
 content_frame.grid_columnconfigure(2, weight=0)
 
-# Sol: büyük görsel alanı (başlangıçta default görsel)
 img_label = tk.Label(content_frame, bg="#ffffff")
 img_label.grid(row=0, column=0, padx=20, pady=(20,6), sticky="nw")
 
-# Navigasyon butonları (sol ve sağ oklar aynı hizada alt köşelerde)
 left_btn = tk.Button(content_frame, text="◀", command=lambda: navigate(-1), width=3)
 left_btn.grid(row=1, column=0, padx=20, pady=(0,12), sticky="w")
 right_btn = tk.Button(content_frame, text="▶", command=lambda: navigate(1), width=3)
 right_btn.grid(row=1, column=0, padx=20, pady=(0,12), sticky="e")
 
-# Sol: scrollable galeri (başta gizli)
 gallery_frame = tk.Frame(content_frame, bg="#ffffff")
 gallery_canvas = tk.Canvas(gallery_frame, bg="#ffffff", highlightthickness=0, width=520, height=460)
 scrollbar = ttk.Scrollbar(gallery_frame, orient="vertical", command=gallery_canvas.yview)
@@ -292,13 +276,11 @@ scrollbar.grid(row=0, column=1, sticky="ns")
 gallery_frame.grid_rowconfigure(0, weight=1)
 gallery_frame.grid_columnconfigure(0, weight=1)
 
-gallery_images_refs = []  # thumbnails GC'den korunur
-
-# Galeri gezinme durumu
+gallery_images_refs = [] 
 gallery_filepaths = []
 current_idx = -1
-last_selected_category = None  # geri dönüş için son görüntülenen kategori
-current_image_path = None      # ekranda büyük gösterilen son görsel
+last_selected_category = None 
+current_image_path = None      
 
 def ensure_gallery_for_path(path):
     """If gallery list does not match the folder of path, rebuild it from that folder."""
@@ -344,11 +326,9 @@ def go_back():
     Priority: last_selected_category (if exists in AUG_PATH), otherwise infer from current_image_path
     if it resides under AUG_PATH. If none available, do nothing.
     """
-    # 1) Try stored last_selected_category
     if last_selected_category and os.path.isdir(os.path.join(AUG_PATH, last_selected_category)):
         display_images_by_category(last_selected_category)
         return
-    # 2) Try infer from current image path
     if current_image_path:
         abs_aug = os.path.abspath(AUG_PATH)
         abs_cur = os.path.abspath(current_image_path)
@@ -357,8 +337,6 @@ def go_back():
             if cat and os.path.isdir(os.path.join(AUG_PATH, cat)):
                 display_images_by_category(cat)
                 return
-    # 3) Fallback: do nothing (or show gallery of first category if you want)
-    # pass
 
 
 def _gal_conf(_):
@@ -366,7 +344,6 @@ def _gal_conf(_):
 
 gallery_inner.bind("<Configure>", _gal_conf)
 
-# Sağ: bilgi alanı (düzenli grid, iki sütun)
 info_frame = tk.Frame(content_frame, bg="#ffffff")
 info_frame.grid(row=0, column=1, padx=20, pady=20, sticky="ne")
 
@@ -391,7 +368,6 @@ def update_info_panel(model_no, firma_no, grup, cins):
     info_grup_val.config(text=str(grup) if grup else "-")
     info_cins_val.config(text=str(cins) if cins else "-")
 
-# Sağ üst: hamburger
 top_controls = tk.Frame(content_frame, bg="white")
 up_btn = tk.Button(top_controls, text="▲", font=("Segoe UI", 12), command=go_back, bd=0, bg="white")
 hamburger_btn = tk.Button(top_controls, text="☰", font=("Segoe UI", 14), command=open_filter_panel, bd=0, bg="white")
@@ -399,12 +375,10 @@ up_btn.pack(side="left", padx=(0,8))
 hamburger_btn.pack(side="left")
 top_controls.grid(row=0, column=2, padx=10, pady=10, sticky="ne")
 
-# Alt: Görsel Seç
 select_btn = tk.Button(root, text="Görsel Seç", command=upload_and_predict,
                        bg="#1abc9c", fg="white", font=("Segoe UI", 12, "bold"), padx=20, pady=10, relief="flat")
 select_btn.pack(pady=18)
 
-# Başlangıçta default görsel
 if os.path.exists(DEFAULT_IMAGE_PATH):
     try:
         _img = Image.open(DEFAULT_IMAGE_PATH).resize((300, 300))
@@ -414,7 +388,6 @@ if os.path.exists(DEFAULT_IMAGE_PATH):
     except Exception:
         pass
 
-# Klavye ok tuşlarıyla gezinme
 root.bind_all("<Left>", on_left)
 root.bind_all("<Right>", on_right)
 
