@@ -27,12 +27,9 @@ This project aims to classify clothing images into categories such as `dress`, `
 ## 🚀 How to Run
 
 ```bash
-pip install -r requirements.txt
-python app.py
-pip install -r requirements.txt
-python app.py
-## Kurulum
-1) Python 3.10+ kurun ve sanal ortam:
+## TR
+## YÜKLEME 
+1) Python 3.10+ install and virtual environment kurun ve sanal ortam:
    python -m venv .venv
    .\.venv\Scripts\activate
    pip install -r requirements.txt
@@ -41,4 +38,17 @@ python app.py
    Üretilen modeli köke `simple_cnn_model.keras` adıyla yerleştirin (Git'e dahil edilmez).
 
 3) (Uygulama) Klasöre `model_kodlari.csv` ekleyin (paylaşılmaz).
-   Format için `model_kodlari.sample.csv` dosyasına bakın.
+   Format için `model_kodlari.sample.csv` dosyasına bakıp kendi csv dosyanızı oluşturun.
+
+## EN
+## INSTALL
+1) Install Python 3.10+ and create/activate a virtual environment:
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+
+2) Training: Put your data under dataset/. Use augment.py to augment it, then train_model.py to train.
+Place the resulting model in the project root as simple_cnn_model.keras (not committed to Git).
+
+3) Application: Add model_kodlari.csv to the project folder (do not share/commit).
+Use model_kodlari.sample.csv as a reference to create your own CSV in the same format.
