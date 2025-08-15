@@ -27,8 +27,8 @@ This project aims to classify clothing images into categories such as `dress`, `
 ## 🚀 How to Run
 
 ```bash
-## TR
-## YÜKLEME 
+### TR
+
 1) Python 3.10+ install and virtual environment kurun ve sanal ortam:
    python -m venv .venv
    .\.venv\Scripts\activate
@@ -40,8 +40,8 @@ This project aims to classify clothing images into categories such as `dress`, `
 3) (Uygulama) Klasöre `model_kodlari.csv` ekleyin (paylaşılmaz).
    Format için `model_kodlari.sample.csv` dosyasına bakıp kendi csv dosyanızı oluşturun.
 
-## EN
-## INSTALL
+### EN
+
 1) Install Python 3.10+ and create/activate a virtual environment:
 python -m venv .venv
 .\.venv\Scripts\activate
